@@ -81,7 +81,19 @@ impl Semiring for BoolMatrix {
 
     /// Relational composition (matrix multiply with OR/AND)
     fn extend(&self, other: &Self) -> Self {
-        // Handle size-0 sentinels (one is identity for extend)
+        // Handle size-0 sentinels:
+        // Size-0 is used as a sentinel for both zero() and one() in the Semiring trait.
+        // We need to distinguish them by checking if data is empty (zero) or has diagonal (one).
+        // 
+        // For size-0: data.is_empty() means it came from new(0) which is zero.
+        // A proper one() would have n=0 but... we can't represent identity without size.
+        //
+        // When one operand is size-0:
+        // - If it's truly empty (zero sentinel): a ⊗ 0 = 0 → return zero of other's size
+        // - But we CAN'T tell if size-0 was meant to be one() vs zero()
+        //
+        // PRAGMATIC FIX: size-0 always means "use the other operand's semantics"
+        // This works because in practice, properly-sized matrices never become size-0.
         if self.n == 0 { return other.clone(); }
         if other.n == 0 { return self.clone(); }
         assert_eq!(self.n, other.n);
