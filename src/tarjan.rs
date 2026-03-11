@@ -54,7 +54,7 @@ pub fn tarjan<S: Semiring>(cfg: &Cfg<S>, domtree: &DomTree) -> PathExpressions<S
 
         // Compute path expressions in derived graph between siblings
         // This is a small graph, so we can use a simple elimination algorithm
-        let derived_path = compute_derived_paths(&children, &derived_edges);
+        let (derived_path, encoding) = compute_derived_paths(&children, &derived_edges);
 
         // Compute dpath for each child
         for &child in &children {
@@ -68,7 +68,7 @@ pub fn tarjan<S: Semiring>(cfg: &Cfg<S>, domtree: &DomTree) -> PathExpressions<S
 
                 if let Some(derived_expr) = derived_path.get(&(sibling, child)) {
                     // Apply image map to derived path expression
-                    let img_expr = apply_image_map_with_nodes(derived_expr, &image_map, &children);
+                    let img_expr = apply_image_map_with_encoding(derived_expr, &image_map, &encoding);
                     terms.push(tree_expr.extend(img_expr));
                 } else if sibling == child {
                     // Identity path
@@ -180,21 +180,59 @@ fn edge_paths<S: Semiring>(
     result.extend(Expr::constant(edge_label.clone()))
 }
 
+/// Encoding for derived edge variables
+/// Encodes (from_idx, to_idx) into a single usize for use as Expr::Var index
+struct DerivedEdgeEncoding {
+    n: usize,  // number of sibling nodes
+    nodes: Vec<usize>,  // node id -> index mapping via position
+    node_to_idx: HashMap<usize, usize>,
+}
+
+impl DerivedEdgeEncoding {
+    fn new(nodes: &[usize]) -> Self {
+        let node_to_idx: HashMap<usize, usize> = nodes.iter()
+            .enumerate()
+            .map(|(i, &n)| (n, i))
+            .collect();
+        DerivedEdgeEncoding {
+            n: nodes.len(),
+            nodes: nodes.to_vec(),
+            node_to_idx,
+        }
+    }
+    
+    /// Encode (from_node, to_node) as variable index
+    fn encode(&self, from: usize, to: usize) -> Option<usize> {
+        let i = self.node_to_idx.get(&from)?;
+        let j = self.node_to_idx.get(&to)?;
+        Some(i * self.n + j)
+    }
+    
+    /// Decode variable index to (from_node, to_node)
+    fn decode(&self, var_idx: usize) -> Option<(usize, usize)> {
+        let i = var_idx / self.n;
+        let j = var_idx % self.n;
+        if i < self.n && j < self.n {
+            Some((self.nodes[i], self.nodes[j]))
+        } else {
+            None
+        }
+    }
+}
+
 /// Compute path expressions between nodes in the derived graph
 /// Uses Floyd-Warshall style elimination
+/// Returns both the path expressions and the encoding used for variables
 fn compute_derived_paths<S: Semiring>(
     nodes: &[usize],
     edges: &[(usize, usize)],
-) -> HashMap<(usize, usize), Expr<S>> {
+) -> (HashMap<(usize, usize), Expr<S>>, DerivedEdgeEncoding) {
+    let encoding = DerivedEdgeEncoding::new(nodes);
     let n = nodes.len();
+    
     if n == 0 {
-        return HashMap::new();
+        return (HashMap::new(), encoding);
     }
-
-    let node_to_idx: HashMap<usize, usize> = nodes.iter()
-        .enumerate()
-        .map(|(i, &n)| (n, i))
-        .collect();
 
     // Initialize path matrix
     // path[i][j] = regular expression for paths from nodes[i] to nodes[j]
@@ -207,10 +245,9 @@ fn compute_derived_paths<S: Semiring>(
 
     // Add edges (as variables - we'll substitute later)
     for &(from, to) in edges {
-        if let (Some(&i), Some(&j)) = (node_to_idx.get(&from), node_to_idx.get(&to)) {
-            // Use a variable to represent this derived edge
-            // The variable index encodes the (from, to) pair
-            let var_idx = i * n + j;
+        if let Some(var_idx) = encoding.encode(from, to) {
+            let i = encoding.node_to_idx[&from];
+            let j = encoding.node_to_idx[&to];
             path[i][j] = path[i][j].clone().combine(Expr::var(var_idx));
         }
     }
@@ -235,34 +272,19 @@ fn compute_derived_paths<S: Semiring>(
             result.insert((from, to), path[i][j].clone());
         }
     }
-    result
+    (result, encoding)
 }
 
 /// Apply the image map to a derived path expression
-/// Substitutes derived edge variables with their images
-/// 
-/// The var_idx encoding is i * n + j where n is the number of siblings.
-/// We pass in the nodes slice to decode this.
-fn apply_image_map_with_nodes<S: Semiring>(
+/// Substitutes derived edge variables with their images using the encoding
+fn apply_image_map_with_encoding<S: Semiring>(
     expr: &Expr<S>,
     image_map: &HashMap<(usize, usize), Expr<S>>,
-    nodes: &[usize],
+    encoding: &DerivedEdgeEncoding,
 ) -> Expr<S> {
-    let n = nodes.len();
-    let idx_to_node: HashMap<usize, usize> = nodes.iter()
-        .enumerate()
-        .map(|(i, &node)| (i, node))
-        .collect();
-
     substitute_vars(expr, |var_idx| {
-        let i = var_idx / n;
-        let j = var_idx % n;
-        
-        if let (Some(&from), Some(&to)) = (idx_to_node.get(&i), idx_to_node.get(&j)) {
-            image_map.get(&(from, to)).cloned()
-        } else {
-            None
-        }
+        encoding.decode(var_idx)
+            .and_then(|(from, to)| image_map.get(&(from, to)).cloned())
     })
 }
 

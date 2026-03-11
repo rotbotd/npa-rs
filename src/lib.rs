@@ -1,5 +1,6 @@
 pub mod semiring;
 pub mod boolean_matrix;
+pub mod sparse_matrix;
 pub mod expr;
 pub mod cfg;
 pub mod tarjan;
@@ -9,6 +10,7 @@ pub mod npa;
 
 pub use semiring::{Semiring, Admissible, coupling};
 pub use boolean_matrix::{BoolMatrix, TensorMatrix};
+pub use sparse_matrix::{SparseBoolMatrix, SparseTensorMatrix};
 pub use expr::{Expr, GenExpr, GenValue};
 pub use cfg::{Cfg, Edge, DomTree};
 pub use tarjan::{tarjan, PathExpressions};
