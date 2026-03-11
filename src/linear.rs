@@ -18,6 +18,52 @@ pub fn is_linear<S: Semiring>(expr: &Expr<S>, n_vars: usize) -> bool {
     is_linear_inner(expr, &mut var_counts)
 }
 
+/// Check if an expression is LEFT-linear: variables only appear as `coeff ⊗ X`,
+/// never as `X ⊗ coeff` or `c1 ⊗ X ⊗ c2`.
+/// 
+/// This is required for extract_linear() and solve_linear().
+pub fn is_left_linear<S: Semiring>(expr: &Expr<S>, n_vars: usize) -> bool {
+    is_left_linear_inner(expr, n_vars, true)
+}
+
+fn is_left_linear_inner<S: Semiring>(expr: &Expr<S>, n_vars: usize, can_have_var: bool) -> bool {
+    match expr {
+        Expr::Zero | Expr::One | Expr::Const(_) => true,
+        Expr::Var(i) => can_have_var && *i < n_vars,
+        Expr::Combine(a, b) => {
+            is_left_linear_inner(a, n_vars, can_have_var) && 
+            is_left_linear_inner(b, n_vars, can_have_var)
+        }
+        Expr::Extend(a, b) => {
+            // For left-linear: a must be variable-free, b can have variables
+            // This ensures variables only appear on the RIGHT of extends
+            let a_has_var = has_variable(a, n_vars);
+            if a_has_var {
+                // Variable on left side of extend - not left-linear
+                false
+            } else {
+                // a is constant, recurse into b
+                is_left_linear_inner(b, n_vars, can_have_var)
+            }
+        }
+        Expr::Star(inner) => {
+            // Star must be variable-free for linearity
+            !has_variable(inner, n_vars)
+        }
+    }
+}
+
+fn has_variable<S: Semiring>(expr: &Expr<S>, n_vars: usize) -> bool {
+    match expr {
+        Expr::Zero | Expr::One | Expr::Const(_) => false,
+        Expr::Var(i) => *i < n_vars,
+        Expr::Combine(a, b) | Expr::Extend(a, b) => {
+            has_variable(a, n_vars) || has_variable(b, n_vars)
+        }
+        Expr::Star(inner) => has_variable(inner, n_vars),
+    }
+}
+
 fn is_linear_inner<S: Semiring>(expr: &Expr<S>, var_counts: &mut [usize]) -> bool {
     match expr {
         Expr::Zero | Expr::One | Expr::Const(_) => true,
@@ -69,20 +115,24 @@ fn is_linear_inner<S: Semiring>(expr: &Expr<S>, var_counts: &mut [usize]) -> boo
     }
 }
 
-/// Result of extracting a linear expression
+/// Result of extracting a left-linear expression
 #[derive(Clone, Debug)]
 pub struct LinearForm<S: Semiring> {
     pub constant: S,
     pub coeffs: Vec<S>,
 }
 
-/// Extract linear form from expression.
+/// Extract linear form from a LEFT-linear expression.
 /// 
-/// For a left-linear expression `c ⊕ Σ(a_j ⊗ X_j)`, returns:
+/// For an expression of the form `c ⊕ Σ(a_j ⊗ X_j)`, returns:
 /// - constant = c
 /// - coeffs[j] = a_j
 ///
-/// Uses structural recursion, tracking left coefficient context.
+/// IMPORTANT: Only works for left-linear expressions where variables appear
+/// as `coeff ⊗ X`, never `X ⊗ coeff`. Use is_left_linear() to check first.
+/// Sandwich forms like `c1 ⊗ X ⊗ c2` will give incorrect results.
+///
+/// For non-left-linear systems, use NPA instead.
 pub fn extract_linear<S: Semiring + Clone>(expr: &Expr<S>, n_vars: usize) -> LinearForm<S> {
     extract_linear_with_coeff(expr, n_vars, S::one())
 }
@@ -324,6 +374,37 @@ mod tests {
         let a = BoolMatrix::identity(2);
         let expr: Expr<BoolMatrix> = Expr::Star(Expr::Const(a).into());
         assert!(is_linear(&expr, 1));
+    }
+
+    #[test]
+    fn test_sandwich_not_left_linear() {
+        // c1 ⊗ X ⊗ c2 - variable in the middle, NOT left-linear
+        let mut c1 = BoolMatrix::new(2);
+        c1.set(0, 0, true);
+        let mut c2 = BoolMatrix::new(2);
+        c2.set(1, 1, true);
+        
+        // Build: c1 ⊗ (X ⊗ c2) = Extend(c1, Extend(X, c2))
+        let sandwich: Expr<BoolMatrix> = Expr::Extend(
+            Expr::Const(c1.clone()).into(),
+            Expr::Extend(
+                Expr::Var(0).into(),
+                Expr::Const(c2.clone()).into(),
+            ).into(),
+        );
+        
+        // This IS linear (each var appears once, no vars in stars)
+        assert!(is_linear(&sandwich, 1));
+        
+        // But it's NOT left-linear (var has stuff on its right)
+        assert!(!is_left_linear(&sandwich, 1));
+        
+        // Left-linear form: c1 ⊗ X
+        let left_linear: Expr<BoolMatrix> = Expr::Extend(
+            Expr::Const(c1.clone()).into(),
+            Expr::Var(0).into(),
+        );
+        assert!(is_left_linear(&left_linear, 1));
     }
 
     #[test]
