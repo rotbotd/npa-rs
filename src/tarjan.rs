@@ -68,7 +68,7 @@ pub fn tarjan<S: Semiring>(cfg: &Cfg<S>, domtree: &DomTree) -> PathExpressions<S
 
                 if let Some(derived_expr) = derived_path.get(&(sibling, child)) {
                     // Apply image map to derived path expression
-                    let img_expr = apply_image_map(derived_expr, &image_map);
+                    let img_expr = apply_image_map_with_nodes(derived_expr, &image_map, &children);
                     terms.push(tree_expr.extend(img_expr));
                 } else if sibling == child {
                     // Identity path
@@ -240,13 +240,56 @@ fn compute_derived_paths<S: Semiring>(
 
 /// Apply the image map to a derived path expression
 /// Substitutes derived edge variables with their images
-fn apply_image_map<S: Semiring>(
+/// 
+/// The var_idx encoding is i * n + j where n is the number of siblings.
+/// We pass in the nodes slice to decode this.
+fn apply_image_map_with_nodes<S: Semiring>(
     expr: &Expr<S>,
-    _image_map: &HashMap<(usize, usize), Expr<S>>,
+    image_map: &HashMap<(usize, usize), Expr<S>>,
+    nodes: &[usize],
 ) -> Expr<S> {
-    // TODO: proper substitution of derived edge variables
-    // For now, just return the expression — works for simple cases
-    expr.clone()
+    let n = nodes.len();
+    let idx_to_node: HashMap<usize, usize> = nodes.iter()
+        .enumerate()
+        .map(|(i, &node)| (i, node))
+        .collect();
+
+    substitute_vars(expr, |var_idx| {
+        let i = var_idx / n;
+        let j = var_idx % n;
+        
+        if let (Some(&from), Some(&to)) = (idx_to_node.get(&i), idx_to_node.get(&j)) {
+            image_map.get(&(from, to)).cloned()
+        } else {
+            None
+        }
+    })
+}
+
+/// Substitute variables in an expression using a lookup function
+/// If the function returns None, keep the variable as-is
+fn substitute_vars<S: Semiring, F>(expr: &Expr<S>, lookup: F) -> Expr<S>
+where
+    F: Fn(usize) -> Option<Expr<S>> + Copy,
+{
+    match expr {
+        Expr::Const(s) => Expr::Const(s.clone()),
+        Expr::Var(i) => lookup(*i).unwrap_or_else(|| Expr::Var(*i)),
+        Expr::Combine(a, b) => {
+            let a_sub = substitute_vars(a, lookup);
+            let b_sub = substitute_vars(b, lookup);
+            a_sub.combine(b_sub)
+        }
+        Expr::Extend(a, b) => {
+            let a_sub = substitute_vars(a, lookup);
+            let b_sub = substitute_vars(b, lookup);
+            a_sub.extend(b_sub)
+        }
+        Expr::Star(a) => {
+            let a_sub = substitute_vars(a, lookup);
+            a_sub.star()
+        }
+    }
 }
 
 /// Sum a list of expressions with ⊕
