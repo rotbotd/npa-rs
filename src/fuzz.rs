@@ -607,7 +607,7 @@ pub fn run_fuzz(seed: u64, iterations: usize) -> Vec<String> {
         // Test NPA convergence with LiftedMatrix (less frequently due to cost)
         // Note: NPA still uses BoolMatrix directly, so we test that separately
         if i % 10 == 0 {
-            let n_eq = 1 + rng.next_usize(3);
+            let n_eq = 1 + rng.next_usize(7); // test up to 8 equations
             let mat_size = 2;
             if let Err(e) = test_npa_convergence(&mut rng, n_eq, mat_size, 3, 50) {
                 failures.push(format!("iter {}: NPA: {}", i, e));
@@ -689,8 +689,8 @@ mod tests {
         let mut failures = Vec::new();
 
         for i in 0..1000 {
-            let n_eq = 1 + rng.next_usize(3);
-            let mat_size = 2 + rng.next_usize(2);
+            let n_eq = 1 + rng.next_usize(7); // test up to 8 equations
+            let mat_size = 2 + rng.next_usize(14); // test up to 16x16 matrices
             
             let constants: Vec<BoolMatrix> = (0..3)
                 .map(|_| random_bool_matrix(&mut rng, mat_size, 0.3))
