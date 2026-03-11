@@ -4,7 +4,7 @@ use crate::expr::Expr;
 use crate::cfg::{Cfg, DomTree};
 use crate::tarjan::tarjan;
 use crate::differentiate::differentiate;
-use crate::regularize::{tau_reg_coefficient_direct, tau_reg_constant};
+use crate::regularize::{differentiate_to_lcfl, lcfl_to_tensor_coeffs, sum_tensor_coeffs, tau_reg_constant, LcflTerm};
 
 /// Result of NPA-TP analysis
 #[derive(Clone, Debug)]
@@ -56,6 +56,9 @@ pub struct NpaSolver<S: Admissible> {
     pub dep_graph: Cfg<DepLabel>,
     /// Path expressions from Tarjan on dependence graph (computed once)
     pub path_exprs: HashMap<usize, Expr<DepLabel>>,
+    /// Precomputed LCFL terms for each (k, j) coefficient
+    /// lcfl_terms[k][j] = differentiate_to_lcfl(rhs[j], k)
+    pub lcfl_terms: Vec<Vec<Vec<LcflTerm<S>>>>,
     /// Identity element (properly sized)
     pub one: S,
 }
@@ -79,7 +82,16 @@ impl<S: Admissible> NpaSolver<S> {
         let domtree = DomTree::compute(&dep_graph);
         let path_exprs = tarjan(&dep_graph, &domtree);
         
-        NpaSolver { n, rhs, dep_graph, path_exprs, one }
+        // Precompute LCFL terms for all (k, j) coefficient pairs
+        // The derivative structure never changes, only the values we evaluate at
+        let mut lcfl_terms = vec![vec![vec![]; n]; n];
+        for j in 0..n {
+            for k in 0..n {
+                lcfl_terms[k][j] = differentiate_to_lcfl(&rhs[j], k);
+            }
+        }
+        
+        NpaSolver { n, rhs, dep_graph, path_exprs, lcfl_terms, one }
     }
 
     /// Build dependence graph from RHS expressions
@@ -152,8 +164,14 @@ impl<S: Admissible> NpaSolver<S> {
         
         for j in 0..self.n {
             for k in 0..self.n {
-                // Use the direct coefficient computation which avoids X vs Y shadowing
-                coeffs[k][j] = tau_reg_coefficient_direct(&self.rhs[j], k, nu, &self.one);
+                // Use precomputed LCFL terms - only evaluate at current nu
+                let terms = &self.lcfl_terms[k][j];
+                if terms.is_empty() {
+                    coeffs[k][j] = S::Tensor::zero();
+                } else {
+                    let tensor_coeffs = lcfl_to_tensor_coeffs(terms, nu, &self.one);
+                    coeffs[k][j] = sum_tensor_coeffs::<S>(tensor_coeffs);
+                }
             }
         }
         

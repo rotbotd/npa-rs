@@ -112,11 +112,11 @@ Pattern match wasn't exhaustive - added `Expr::Zero` and `Expr::One` cases with 
 **Fix:** Commit `8e132b1`
 
 ### 5B. Hoist Formal Derivative Out of Loop
-**Status:** 🔲 Not started
+**Status:** ✅ Resolved
 
-Currently computes `differentiate_to_lcfl` inside the Newton loop. The derivative AST never changes between rounds - only the evaluation at ν changes. Should precompute in `NpaSolver::new()`.
+Precomputed `differentiate_to_lcfl` for all (k, j) pairs in `NpaSolver::new()`. The Newton loop now only evaluates the precomputed LCFL terms at the current ν.
 
-**Priority:** Medium - performance
+**Fix:** Added `lcfl_terms` field to `NpaSolver`, computed once at construction
 
 ### 5C. Memoization for eval_path_expr
 **Status:** ✅ Resolved
@@ -166,13 +166,12 @@ Added the fundamental theorem (Equation 43) to `test_admissible_laws`:
 | 2     | 4           | 1        | 3         |
 | 3     | 3           | 2        | 1         |
 | 4     | 2           | 1        | 1         |
-| 5     | 4           | 4        | 0         |
+| 5     | 4           | 5        | 0         |
 | 6     | 2           | 2        | 0         |
-| **Total** | **18**  | **10**   | **8**     |
+| **Total** | **18**  | **11**   | **7**     |
 
 ### Medium Priority Remaining  
-- **2B.** Sparse matrix allocation in hot path
-- **5B.** Hoist derivative computation
+- **2B.** Sparse matrix allocation in hot path (deferred - not clear bottleneck)
 
 ### Low Priority (Refinements)
 - 1A, 1B, 1C, 2C, 2D, 3B, 4B
