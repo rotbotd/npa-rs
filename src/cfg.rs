@@ -1,4 +1,4 @@
-use std::collections::{HashMap, HashSet};
+use rustc_hash::{FxHashMap as HashMap, FxHashSet as HashSet};
 
 /// A labeled edge in the CFG
 #[derive(Clone, Debug)]
@@ -23,16 +23,16 @@ pub struct Cfg<L> {
 
 impl<L: Clone> Cfg<L> {
     pub fn new(entry: usize) -> Self {
-        let mut nodes = HashSet::new();
+        let mut nodes = HashSet::default();
         nodes.insert(entry);
         Cfg {
             entry,
             nodes,
             edges: Vec::new(),
-            succs: HashMap::new(),
-            preds: HashMap::new(),
-            out_edges: HashMap::new(),
-            in_edges: HashMap::new(),
+            succs: HashMap::default(),
+            preds: HashMap::default(),
+            out_edges: HashMap::default(),
+            in_edges: HashMap::default(),
         }
     }
 
@@ -102,7 +102,7 @@ impl DomTree {
             .collect();
         
         // Initialize dominators: entry dominates itself, others dominated by all
-        let mut doms: Vec<HashSet<usize>> = vec![HashSet::new(); n];
+        let mut doms: Vec<HashSet<usize>> = vec![HashSet::default(); n];
         let entry_idx = node_to_idx[&cfg.entry];
         doms[entry_idx].insert(cfg.entry);
         
@@ -144,7 +144,7 @@ impl DomTree {
         }
         
         // Extract immediate dominators
-        let mut idom = HashMap::new();
+        let mut idom = HashMap::default();
         for &node in &nodes {
             if node == cfg.entry {
                 continue;
@@ -172,7 +172,7 @@ impl DomTree {
         }
         
         // Build children map
-        let mut children: HashMap<usize, Vec<usize>> = HashMap::new();
+        let mut children: HashMap<usize, Vec<usize>> = HashMap::default();
         for &node in &nodes {
             children.insert(node, Vec::new());
         }

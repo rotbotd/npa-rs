@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use rustc_hash::FxHashMap as HashMap;
 use crate::semiring::{Semiring, Admissible};
 use crate::expr::Expr;
 use crate::cfg::{Cfg, DomTree};
@@ -171,7 +171,7 @@ impl<S: Admissible> NpaSolver<S> {
         let rhs_values: Vec<S> = self.rhs.iter().map(|rhs| rhs.eval(nu)).collect();
         
         // Build substitution map for path expression evaluation
-        let mut label_values: HashMap<DepLabel, S::Tensor> = HashMap::new();
+        let mut label_values: HashMap<DepLabel, S::Tensor> = HashMap::default();
         
         for j in 1..=self.n {
             // Constant term: <0,j> → (1ᵗ ⊗ Rhs_j(ν))
@@ -249,7 +249,24 @@ fn eval_path_expr<S: Admissible>(
     label_values: &HashMap<DepLabel, S::Tensor>,
     tensor_size: usize,
 ) -> S::Tensor {
-    match expr {
+    // Use memoization to avoid O(2^N) blowup on DAG expressions
+    let mut memo: HashMap<*const Expr<DepLabel>, S::Tensor> = HashMap::default();
+    eval_path_expr_memo::<S>(expr, label_values, tensor_size, &mut memo)
+}
+
+fn eval_path_expr_memo<S: Admissible>(
+    expr: &Expr<DepLabel>,
+    label_values: &HashMap<DepLabel, S::Tensor>,
+    tensor_size: usize,
+    memo: &mut HashMap<*const Expr<DepLabel>, S::Tensor>,
+) -> S::Tensor {
+    // Check memo first using pointer address as key
+    let ptr = expr as *const Expr<DepLabel>;
+    if let Some(cached) = memo.get(&ptr) {
+        return cached.clone();
+    }
+    
+    let result = match expr {
         Expr::Zero => S::Tensor::zero_sized(tensor_size),
         Expr::One => S::Tensor::one_sized(tensor_size),
         Expr::Const(label) => {
@@ -267,20 +284,23 @@ fn eval_path_expr<S: Admissible>(
             S::Tensor::zero_sized(tensor_size)
         }
         Expr::Combine(a, b) => {
-            let a_val: S::Tensor = eval_path_expr::<S>(a, label_values, tensor_size);
-            let b_val: S::Tensor = eval_path_expr::<S>(b, label_values, tensor_size);
+            let a_val: S::Tensor = eval_path_expr_memo::<S>(a, label_values, tensor_size, memo);
+            let b_val: S::Tensor = eval_path_expr_memo::<S>(b, label_values, tensor_size, memo);
             a_val.combine(&b_val)
         }
         Expr::Extend(a, b) => {
-            let a_val: S::Tensor = eval_path_expr::<S>(a, label_values, tensor_size);
-            let b_val: S::Tensor = eval_path_expr::<S>(b, label_values, tensor_size);
+            let a_val: S::Tensor = eval_path_expr_memo::<S>(a, label_values, tensor_size, memo);
+            let b_val: S::Tensor = eval_path_expr_memo::<S>(b, label_values, tensor_size, memo);
             a_val.extend(&b_val)
         }
         Expr::Star(a) => {
-            let a_val: S::Tensor = eval_path_expr::<S>(a, label_values, tensor_size);
+            let a_val: S::Tensor = eval_path_expr_memo::<S>(a, label_values, tensor_size, memo);
             a_val.star()
         }
-    }
+    };
+    
+    memo.insert(ptr, result.clone());
+    result
 }
 
 /// Convenience function to solve a system of equations

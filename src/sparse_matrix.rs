@@ -1,4 +1,4 @@
-use std::collections::{HashMap, HashSet};
+use rustc_hash::{FxHashMap as HashMap, FxHashSet as HashSet};
 use crate::semiring::{Semiring, Admissible};
 
 /// Sparse Boolean matrix representation
@@ -14,7 +14,7 @@ impl SparseBoolMatrix {
     pub fn new(n: usize) -> Self {
         SparseBoolMatrix {
             n,
-            entries: HashSet::new(),
+            entries: HashSet::default(),
         }
     }
 
@@ -80,7 +80,7 @@ impl Semiring for SparseBoolMatrix {
         assert_eq!(self.n, other.n);
 
         // Build column-indexed structure for other matrix (for efficient lookup)
-        let mut other_by_col: HashMap<usize, Vec<usize>> = HashMap::new();
+        let mut other_by_col: HashMap<usize, Vec<usize>> = HashMap::default();
         for &(i, j) in &other.entries {
             other_by_col.entry(i).or_default().push(j);
         }
@@ -136,7 +136,7 @@ impl SparseTensorMatrix {
         SparseTensorMatrix {
             n,
             n2: n * n,
-            entries: HashSet::new(),
+            entries: HashSet::default(),
         }
     }
 
@@ -190,7 +190,7 @@ impl Semiring for SparseTensorMatrix {
         if other.n == 0 { return self.clone(); }
         assert_eq!(self.n, other.n);
 
-        let mut other_by_col: HashMap<usize, Vec<usize>> = HashMap::new();
+        let mut other_by_col: HashMap<usize, Vec<usize>> = HashMap::default();
         for &(i, j) in &other.entries {
             other_by_col.entry(i).or_default().push(j);
         }

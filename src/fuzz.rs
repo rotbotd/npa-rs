@@ -320,7 +320,7 @@ pub fn random_linear_expr<S: Semiring + Clone>(
     constants: &[S],
     max_depth: usize,
 ) -> Expr<S> {
-    let mut used_vars = std::collections::HashSet::new();
+    let mut used_vars = std::collections::HashSet::default();
     random_linear_expr_impl(rng, n_vars, constants, max_depth, 0, &mut used_vars)
 }
 

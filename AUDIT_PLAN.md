@@ -30,11 +30,11 @@ Current `Rc` usage doesn't actually deduplicate identical subtrees. Consider has
 ## Phase 2: `boolean_matrix.rs`, `sparse_matrix.rs`, `lifted_matrix.rs`
 
 ### 2A. HashSet Overhead in sparse_matrix.rs
-**Status:** 🔲 Not started
+**Status:** ✅ Resolved
 
-Replace `HashSet`/`HashMap` with `FxHashSet`/`FxHashMap` from `rustc-hash` crate for ~2x speedup on integer keys.
+Replaced `HashSet`/`HashMap` with `FxHashSet`/`FxHashMap` from `rustc-hash` crate.
 
-**Priority:** Medium - easy win
+**Fix:** Commit adding `rustc-hash` dependency
 
 ### 2B. Memory Allocations in sparse_matrix::extend
 **Status:** 🔲 Not started
@@ -76,11 +76,11 @@ Multiple non-tree edges mapping to the same derived edge would overwrite each ot
 **Priority:** Low - mathematically correct, just inefficient
 
 ### 3C. FxHash for cfg.rs and tarjan.rs
-**Status:** 🔲 Not started
+**Status:** ✅ Resolved
 
-Same as 2A - replace standard HashMap/HashSet with FxHash variants.
+Same as 2A - replaced standard HashMap/HashSet with FxHash variants.
 
-**Priority:** Medium - easy win
+**Fix:** Commit adding `rustc-hash` dependency
 
 ---
 
@@ -119,11 +119,11 @@ Currently computes `differentiate_to_lcfl` inside the Newton loop. The derivativ
 **Priority:** Medium - performance
 
 ### 5C. Memoization for eval_path_expr
-**Status:** 🔲 Not started
+**Status:** ✅ Resolved
 
-Path expressions form a DAG but `eval_path_expr` traverses as if it were a tree, causing O(2^N) blowup. Use `Rc` pointer address as memoization key.
+Added `eval_path_expr_memo` which uses pointer address as memoization key to avoid O(2^N) blowup on DAG expressions.
 
-**Priority:** High - critical for large CFGs
+**Fix:** Commit adding memoization to NPA path expression evaluation
 
 ### 5D. Size Threading for Sentinel Zeros
 **Status:** ✅ Resolved
@@ -163,18 +163,14 @@ Added the fundamental theorem (Equation 43) to `test_admissible_laws`:
 | Phase | Total Issues | Resolved | Remaining |
 |-------|-------------|----------|-----------|
 | 1     | 3           | 0        | 3         |
-| 2     | 4           | 0        | 4         |
-| 3     | 3           | 1        | 2         |
+| 2     | 4           | 1        | 3         |
+| 3     | 3           | 2        | 1         |
 | 4     | 2           | 1        | 1         |
-| 5     | 4           | 3        | 1         |
+| 5     | 4           | 4        | 0         |
 | 6     | 2           | 2        | 0         |
-| **Total** | **18**  | **7**    | **11**    |
-
-### High Priority Remaining
-- **5C.** Memoization for eval_path_expr (O(2^N) → O(N))
+| **Total** | **18**  | **10**   | **8**     |
 
 ### Medium Priority Remaining  
-- **2A, 3C.** FxHash everywhere (easy 2x speedup)
 - **2B.** Sparse matrix allocation in hot path
 - **5B.** Hoist derivative computation
 

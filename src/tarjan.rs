@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use rustc_hash::FxHashMap as HashMap;
 use crate::cfg::{Cfg, DomTree};
 use crate::semiring::Semiring;
 use crate::expr::Expr;
@@ -10,8 +10,8 @@ pub type PathExpressions<S> = HashMap<usize, Expr<S>>;
 /// Compute path expressions using Tarjan's algorithm
 /// Returns a map from each node to a regular expression over edge labels
 pub fn tarjan<S: Semiring>(cfg: &Cfg<S>, domtree: &DomTree) -> PathExpressions<S> {
-    let mut path: HashMap<usize, Expr<S>> = HashMap::new();
-    let mut dpath: HashMap<usize, Expr<S>> = HashMap::new();
+    let mut path: HashMap<usize, Expr<S>> = HashMap::default();
+    let mut dpath: HashMap<usize, Expr<S>> = HashMap::default();
 
     // Compute derived graph
     let (derived_edges, edge_to_derived) = compute_derived_graph(cfg, domtree);
@@ -25,8 +25,8 @@ pub fn tarjan<S: Semiring>(cfg: &Cfg<S>, domtree: &DomTree) -> PathExpressions<S
         }
 
         // For each child, compute dpathTree (sum of tree edges from parent)
-        let mut dpath_tree: HashMap<usize, Expr<S>> = HashMap::new();
-        let mut image_map: HashMap<(usize, usize), Expr<S>> = HashMap::new(); // derived edge -> image
+        let mut dpath_tree: HashMap<usize, Expr<S>> = HashMap::default();
+        let mut image_map: HashMap<(usize, usize), Expr<S>> = HashMap::default(); // derived edge -> image
 
         for &child in &children {
             // Tree edges: edges from idom to child
@@ -113,7 +113,7 @@ fn compute_derived_graph<S: Clone>(
     domtree: &DomTree,
 ) -> (Vec<(usize, usize)>, HashMap<(usize, usize), (usize, usize)>) {
     let mut derived_edges: Vec<(usize, usize)> = Vec::new();
-    let mut edge_to_derived: HashMap<(usize, usize), (usize, usize)> = HashMap::new();
+    let mut edge_to_derived: HashMap<(usize, usize), (usize, usize)> = HashMap::default();
 
     for node in cfg.nodes.iter() {
         for edge in cfg.incoming_edges(*node) {
@@ -234,7 +234,7 @@ fn compute_derived_paths<S: Semiring>(
     let n = nodes.len();
     
     if n == 0 {
-        return (HashMap::new(), encoding);
+        return (HashMap::default(), encoding);
     }
 
     // Initialize path matrix
@@ -269,7 +269,7 @@ fn compute_derived_paths<S: Semiring>(
     }
 
     // Convert back to HashMap
-    let mut result = HashMap::new();
+    let mut result = HashMap::default();
     for (i, &from) in nodes.iter().enumerate() {
         for (j, &to) in nodes.iter().enumerate() {
             result.insert((from, to), path[i][j].clone());
