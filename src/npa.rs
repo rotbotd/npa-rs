@@ -1,5 +1,8 @@
+use std::collections::HashMap;
 use crate::semiring::{Semiring, Admissible};
 use crate::expr::Expr;
+use crate::cfg::{Cfg, DomTree};
+use crate::tarjan::tarjan;
 use crate::differentiate::differentiate;
 use crate::regularize::{tau_reg_coefficient, tau_reg_constant};
 
@@ -10,6 +13,37 @@ pub struct NpaResult<S: Semiring> {
     pub rounds: usize,
 }
 
+/// Label for dependence graph edges: <k, j> means Z_k appears in equation for Z_j
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub struct DepLabel {
+    pub k: usize,  // source variable
+    pub j: usize,  // target equation
+}
+
+/// DepLabel as a "fake" semiring — we never actually evaluate these,
+/// just build expressions over them and substitute later
+impl Semiring for DepLabel {
+    fn zero() -> Self {
+        DepLabel { k: usize::MAX, j: usize::MAX }
+    }
+    
+    fn one() -> Self {
+        DepLabel { k: usize::MAX - 1, j: usize::MAX - 1 }
+    }
+    
+    fn combine(&self, _other: &Self) -> Self {
+        panic!("DepLabel::combine should never be called")
+    }
+    
+    fn extend(&self, _other: &Self) -> Self {
+        panic!("DepLabel::extend should never be called")  
+    }
+    
+    fn star(&self) -> Self {
+        panic!("DepLabel::star should never be called")
+    }
+}
+
 /// NPA-TP solver for interprocedural dataflow analysis
 /// 
 /// Implements Algorithm 7.1 from the POPL 2016 paper.
@@ -18,8 +52,10 @@ pub struct NpaSolver<S: Admissible> {
     pub n: usize,
     /// Right-hand side expressions for each equation
     pub rhs: Vec<Expr<S>>,
-    /// Path expressions from Tarjan (precomputed)
-    pub path_exprs: Vec<Expr<S::Tensor>>,
+    /// Dependence graph (computed once)
+    pub dep_graph: Cfg<DepLabel>,
+    /// Path expressions from Tarjan on dependence graph (computed once)
+    pub path_exprs: HashMap<usize, Expr<DepLabel>>,
     /// Identity element (properly sized)
     pub one: S,
 }
@@ -32,25 +68,41 @@ impl<S: Admissible> NpaSolver<S> {
     pub fn new(rhs: Vec<Expr<S>>, one: S) -> Self {
         let n = rhs.len();
         
-        // Build the dependence graph for the linearized system
-        // This is a simplified version - full version would do Tarjan on the dependence graph
-        let path_exprs = Self::build_path_expressions(n, &rhs);
+        // Build dependence graph G:
+        // - Dummy vertex 0 (entry)
+        // - Vertices 1..=n for Z_1..Z_n
+        // - Edge from 0 to j labeled <0,j> for constant term
+        // - Edge from k to j labeled <k,j> if Z_k appears in RHS of Z_j
+        let dep_graph = Self::build_dependence_graph(n, &rhs);
         
-        NpaSolver { n, rhs, path_exprs, one }
+        // Run Tarjan on dependence graph to get path expressions
+        let domtree = DomTree::compute(&dep_graph);
+        let path_exprs = tarjan(&dep_graph, &domtree);
+        
+        NpaSolver { n, rhs, dep_graph, path_exprs, one }
     }
 
-    /// Build parameterized path expressions for the tensor system
-    /// 
-    /// In the full algorithm, we'd:
-    /// 1. Build dependence graph G with edges Z_k → Z_j labeled <k,j>
-    /// 2. Run Tarjan on G to get regular expressions R_i
-    /// 
-    /// For now, we use a simplified direct iteration approach.
-    fn build_path_expressions(n: usize, _rhs: &[Expr<S>]) -> Vec<Expr<S::Tensor>> {
-        // Simplified: just return placeholders
-        // The real implementation would construct the dependence graph
-        // and run Tarjan to get the parameterized expressions
-        vec![Expr::zero(); n]
+    /// Build dependence graph from RHS expressions
+    fn build_dependence_graph(n: usize, rhs: &[Expr<S>]) -> Cfg<DepLabel> {
+        // Vertex 0 = dummy entry (Λ in the paper)
+        // Vertices 1..=n = Z_1..Z_n
+        let mut cfg = Cfg::new(0);
+        
+        for j in 1..=n {
+            cfg.add_node(j);
+            
+            // Edge from entry to each Z_j (constant term)
+            cfg.add_edge(0, j, DepLabel { k: 0, j });
+            
+            // Check which variables appear in RHS of equation j-1
+            let vars = collect_vars(&rhs[j - 1]);
+            for k in vars {
+                // k is 0-indexed variable, add 1 for vertex numbering
+                cfg.add_edge(k + 1, j, DepLabel { k: k + 1, j });
+            }
+        }
+        
+        cfg
     }
 
     /// Run Newton iteration until convergence
@@ -72,8 +124,8 @@ impl<S: Admissible> NpaSolver<S> {
             // Compute tensor coefficients T_kj at current ν
             let coeffs = self.compute_coefficients(&nu);
             
-            // Solve left-linear system in tensor semiring
-            let z_values = self.solve_tensor_system(&nu, &coeffs);
+            // Solve using path expressions from Tarjan
+            let z_values = self.solve_with_path_exprs(&nu, &coeffs);
             
             // Apply detensor-transpose to get new ν
             let new_nu: Vec<S> = z_values.iter()
@@ -108,45 +160,100 @@ impl<S: Admissible> NpaSolver<S> {
         coeffs
     }
 
-    /// Solve the left-linear system over tensor semiring
+    /// Solve using precomputed path expressions from Tarjan
     /// 
-    /// Z_j = (1ᵗ ⊗ Rhs_j(ν)) ⊕T Σ_k (Z_k ⊗T T_kj)
-    /// 
-    /// For now, use simple iteration. The full algorithm uses Tarjan's
-    /// precomputed path expressions.
-    fn solve_tensor_system(
+    /// Each Z_j = R_j[<0,j> ← (1ᵗ ⊗ Rhs_j(ν)), <k,j> ← T_kj]
+    fn solve_with_path_exprs(
         &self, 
         nu: &[S], 
         coeffs: &[Vec<S::Tensor>],
     ) -> Vec<S::Tensor> {
-        // Evaluate RHS at current nu
         let rhs_values: Vec<S> = self.rhs.iter().map(|rhs| rhs.eval(nu)).collect();
         
-        // Initialize with constant terms using properly sized identity
-        let mut z: Vec<S::Tensor> = rhs_values.iter()
-            .map(|rhs_val| tau_reg_constant(rhs_val, &self.one))
-            .collect();
+        // Build substitution map for path expression evaluation
+        let mut label_values: HashMap<DepLabel, S::Tensor> = HashMap::new();
         
-        // Iterate until fixpoint (simplified Kleene iteration in tensor space)
-        let mut prev = vec![S::Tensor::zero(); self.n];
-        
-        while z != prev {
-            prev = z.clone();
+        for j in 1..=self.n {
+            // Constant term: <0,j> → (1ᵗ ⊗ Rhs_j(ν))
+            label_values.insert(
+                DepLabel { k: 0, j },
+                tau_reg_constant(&rhs_values[j - 1], &self.one),
+            );
             
-            for j in 0..self.n {
-                // Z_j = constant ⊕T Σ_k (Z_k ⊗T T_kj)
-                let mut new_zj = tau_reg_constant(&rhs_values[j], &self.one);
-                
-                for k in 0..self.n {
-                    let term = prev[k].extend(&coeffs[k][j]);
-                    new_zj = new_zj.combine(&term);
-                }
-                
-                z[j] = new_zj;
+            // Variable terms: <k,j> → T_{k-1,j-1}
+            for k in 1..=self.n {
+                label_values.insert(
+                    DepLabel { k, j },
+                    coeffs[k - 1][j - 1].clone(),
+                );
             }
         }
         
-        z
+        // Evaluate path expressions for each Z_j
+        let mut z_values = Vec::with_capacity(self.n);
+        
+        for j in 1..=self.n {
+            if let Some(path_expr) = self.path_exprs.get(&j) {
+                let z_j = eval_path_expr::<S>(path_expr, &label_values);
+                z_values.push(z_j);
+            } else {
+                // No path to this node - use constant term only
+                z_values.push(tau_reg_constant(&rhs_values[j - 1], &self.one));
+            }
+        }
+        
+        z_values
+    }
+}
+
+/// Collect all variable indices that appear in an expression
+fn collect_vars<S: Semiring>(expr: &Expr<S>) -> Vec<usize> {
+    let mut vars = Vec::new();
+    collect_vars_impl(expr, &mut vars);
+    vars.sort();
+    vars.dedup();
+    vars
+}
+
+fn collect_vars_impl<S: Semiring>(expr: &Expr<S>, vars: &mut Vec<usize>) {
+    match expr {
+        Expr::Const(_) => {}
+        Expr::Var(i) => vars.push(*i),
+        Expr::Combine(a, b) | Expr::Extend(a, b) => {
+            collect_vars_impl(a, vars);
+            collect_vars_impl(b, vars);
+        }
+        Expr::Star(a) => collect_vars_impl(a, vars),
+    }
+}
+
+/// Evaluate a path expression over DepLabel alphabet with given substitution
+fn eval_path_expr<S: Admissible>(
+    expr: &Expr<DepLabel>,
+    label_values: &HashMap<DepLabel, S::Tensor>,
+) -> S::Tensor {
+    match expr {
+        Expr::Const(label) => {
+            label_values.get(label).cloned().unwrap_or_else(S::Tensor::zero)
+        }
+        Expr::Var(_) => {
+            // Variables in path expressions shouldn't exist after Tarjan
+            S::Tensor::zero()
+        }
+        Expr::Combine(a, b) => {
+            let a_val: S::Tensor = eval_path_expr::<S>(a, label_values);
+            let b_val: S::Tensor = eval_path_expr::<S>(b, label_values);
+            a_val.combine(&b_val)
+        }
+        Expr::Extend(a, b) => {
+            let a_val: S::Tensor = eval_path_expr::<S>(a, label_values);
+            let b_val: S::Tensor = eval_path_expr::<S>(b, label_values);
+            a_val.extend(&b_val)
+        }
+        Expr::Star(a) => {
+            let a_val: S::Tensor = eval_path_expr::<S>(a, label_values);
+            a_val.star()
+        }
     }
 }
 
@@ -173,13 +280,11 @@ mod tests {
         
         assert_eq!(result.values.len(), 1);
         assert_eq!(result.values[0], a);
-        // Constant equation converges in 1 round
     }
     
     #[test]
     fn test_self_reference() {
         // X = a ⊕ X (should converge to a*)
-        // But since X appears linearly, Newton should handle it
         let a = BoolMatrix::identity(2);
         let one = BoolMatrix::identity(2);
         let rhs = vec![
@@ -188,7 +293,6 @@ mod tests {
         
         let result = solve_npa(rhs, one, 20);
         
-        // Should converge
         assert!(result.rounds <= 20);
     }
     
@@ -208,38 +312,17 @@ mod tests {
         let result = solve_npa(rhs, one, 10);
         
         assert_eq!(result.values.len(), 2);
-        // X0 = a = identity
         assert_eq!(result.values[0], a);
-        // X1 = X0 ⊗ b = identity ⊗ identity = identity
         assert_eq!(result.values[1], a.extend(&b));
     }
-}
-
-#[cfg(test)]
-mod debug_tests {
-    use super::*;
-    use crate::boolean_matrix::BoolMatrix;
-    use crate::regularize::tau_reg_constant;
     
     #[test]
-    fn debug_simple() {
-        let a = BoolMatrix::identity(2);
-        let one = BoolMatrix::identity(2);
-        println!("a = {:?}", a);
+    fn test_collect_vars() {
+        let expr: Expr<BoolMatrix> = Expr::var(0)
+            .extend(Expr::var(1))
+            .combine(Expr::var(0));
         
-        // tau_reg_constant creates 1ᵗ ⊗ a
-        let tensor = one.transpose().tensor(&a);
-        println!("tensor (manual) = {:?}", tensor);
-        
-        // tau_reg_constant now takes sized one
-        let tensor2 = tau_reg_constant(&a, &one);
-        println!("tensor (tau_reg) = {:?}", tensor2);
-        
-        // detensor should recover a
-        let recovered = BoolMatrix::detensor_transpose(&tensor);
-        println!("recovered = {:?}", recovered);
-        
-        assert_eq!(recovered, a);
-        assert_eq!(tensor, tensor2);
+        let vars = collect_vars(&expr);
+        assert_eq!(vars, vec![0, 1]);
     }
 }
