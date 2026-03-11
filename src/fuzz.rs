@@ -241,8 +241,17 @@ pub fn test_admissible_laws<S: Admissible + std::fmt::Debug>(
         return Err(format!("transpose doesn't reverse extend: {:?}", (a, b)));
     }
 
-    // Detensor-transpose recovers: (t,·)(aᵗ ⊗ b) should be related to a ⊗ b
-    // This is hard to test directly without more context
+    // Detensor-transpose recovers extend: (t,·)(aᵗ ⊗ b) = a ⊗ b
+    // This is the fundamental theorem of NPA-TP (Equation 43)
+    let tensor_prod = a.transpose().tensor(b);
+    let recovered = S::detensor_transpose(&tensor_prod);
+    let expected = a.extend(b);
+    if recovered != expected {
+        return Err(format!(
+            "detensor-transpose failed: (t,·)(aᵗ ⊗ b) = {:?} != a ⊗ b = {:?}",
+            recovered, expected
+        ));
+    }
 
     Ok(())
 }
@@ -431,18 +440,15 @@ fn random_const_expr<S: Semiring + Clone>(
 fn naive_kleene_iteration(
     rhs: &[Expr<BoolMatrix>],
     max_rounds: usize,
+    mat_size: usize,
 ) -> Option<Vec<BoolMatrix>> {
     if rhs.is_empty() {
         return Some(vec![]);
     }
     
-    // Get matrix size from evaluating at zero
     let n = rhs.len();
-    let zero_values: Vec<BoolMatrix> = vec![BoolMatrix::new(0); n];
-    let first_eval = rhs[0].eval(&zero_values);
-    let mat_size = first_eval.n;
     
-    // Initialize to zero matrices of correct size
+    // Initialize to properly-sized zero matrices
     let mut values: Vec<BoolMatrix> = vec![BoolMatrix::new(mat_size); n];
     
     for _ in 0..max_rounds {
@@ -690,14 +696,16 @@ mod tests {
                 .map(|_| random_bool_matrix(&mut rng, mat_size, 0.3))
                 .collect();
 
+            // Use random_expr (non-linear) to stress test NPA properly
+            // NPA's power is handling quadratic equations and stars
             let rhs: Vec<Expr<BoolMatrix>> = (0..n_eq)
-                .map(|_| random_linear_expr(&mut rng, n_eq, &constants, 3))
+                .map(|_| random_expr(&mut rng, n_eq, &constants, 3))
                 .collect();
 
             let one = BoolMatrix::identity(mat_size);
             let npa_result = solve_npa(rhs.clone(), one, 100);
             
-            if let Some(naive_result) = naive_kleene_iteration(&rhs, 1000) {
+            if let Some(naive_result) = naive_kleene_iteration(&rhs, 1000, mat_size) {
                 if npa_result.values != naive_result {
                     failures.push(format!(
                         "iter {}: NPA != naive\n  NPA: {:?}\n  naive: {:?}",
