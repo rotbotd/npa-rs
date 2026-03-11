@@ -1,4 +1,5 @@
 pub mod semiring;
+pub mod linear;
 pub mod boolean_matrix;
 pub mod sparse_matrix;
 pub mod lifted_matrix;
