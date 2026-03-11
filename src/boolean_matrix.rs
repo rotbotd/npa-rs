@@ -68,6 +68,9 @@ impl Semiring for BoolMatrix {
 
     /// Union of relations (matrix OR)
     fn combine(&self, other: &Self) -> Self {
+        // Handle size-0 sentinels
+        if self.n == 0 { return other.clone(); }
+        if other.n == 0 { return self.clone(); }
         assert_eq!(self.n, other.n);
         let mut m = BoolMatrix::new(self.n);
         for i in 0..self.data.len() {
@@ -78,6 +81,9 @@ impl Semiring for BoolMatrix {
 
     /// Relational composition (matrix multiply with OR/AND)
     fn extend(&self, other: &Self) -> Self {
+        // Handle size-0 sentinels (one is identity for extend)
+        if self.n == 0 { return other.clone(); }
+        if other.n == 0 { return self.clone(); }
         assert_eq!(self.n, other.n);
         let n = self.n;
         let mut m = BoolMatrix::new(n);
@@ -154,6 +160,9 @@ impl Semiring for TensorMatrix {
     }
 
     fn combine(&self, other: &Self) -> Self {
+        // Handle size-0 sentinels
+        if self.n == 0 { return other.clone(); }
+        if other.n == 0 { return self.clone(); }
         assert_eq!(self.n, other.n);
         let mut m = TensorMatrix::new(self.n);
         for i in 0..self.data.len() {
@@ -163,6 +172,9 @@ impl Semiring for TensorMatrix {
     }
 
     fn extend(&self, other: &Self) -> Self {
+        // Handle size-0 sentinels (one is identity for extend)
+        if self.n == 0 { return other.clone(); }
+        if other.n == 0 { return self.clone(); }
         assert_eq!(self.n, other.n);
         let n2 = self.n2;
         let mut m = TensorMatrix::new(self.n);
@@ -199,6 +211,9 @@ impl Admissible for BoolMatrix {
 
     /// Kronecker product: (R ⊗ S)[(a-1)N + b, (a'-1)N + b'] = R(a,a') ∧ S(b,b')
     fn tensor(&self, other: &Self) -> TensorMatrix {
+        // Handle size-0 sentinels
+        if self.n == 0 { return TensorMatrix::new(other.n); }
+        if other.n == 0 { return TensorMatrix::new(self.n); }
         assert_eq!(self.n, other.n);
         let n = self.n;
         let mut t = TensorMatrix::new(n);
