@@ -5,6 +5,10 @@ use crate::semiring::{Semiring, Admissible};
 /// Uses Rc for subexpression sharing (important for efficiency)
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Expr<S: Semiring> {
+    /// Additive identity (abstract zero)
+    Zero,
+    /// Multiplicative identity (abstract one)
+    One,
     /// Constant value
     Const(S),
     /// Variable reference (index into value vector)
@@ -19,11 +23,11 @@ pub enum Expr<S: Semiring> {
 
 impl<S: Semiring> Expr<S> {
     pub fn zero() -> Self {
-        Expr::Const(S::zero())
+        Expr::Zero
     }
 
     pub fn one() -> Self {
-        Expr::Const(S::one())
+        Expr::One
     }
 
     pub fn var(i: usize) -> Self {
@@ -35,25 +39,61 @@ impl<S: Semiring> Expr<S> {
     }
 
     pub fn combine(self, other: Self) -> Self {
-        Expr::Combine(Rc::new(self), Rc::new(other))
+        // Simplify: 0 ⊕ x = x, x ⊕ 0 = x
+        match (&self, &other) {
+            (Expr::Zero, _) => other,
+            (_, Expr::Zero) => self,
+            _ => Expr::Combine(Rc::new(self), Rc::new(other)),
+        }
     }
 
     pub fn extend(self, other: Self) -> Self {
-        Expr::Extend(Rc::new(self), Rc::new(other))
+        // Simplify: 0 ⊗ x = 0, x ⊗ 0 = 0, 1 ⊗ x = x, x ⊗ 1 = x
+        match (&self, &other) {
+            (Expr::Zero, _) | (_, Expr::Zero) => Expr::Zero,
+            (Expr::One, _) => other,
+            (_, Expr::One) => self,
+            _ => Expr::Extend(Rc::new(self), Rc::new(other)),
+        }
     }
 
     pub fn star(self) -> Self {
-        Expr::Star(Rc::new(self))
+        // Simplify: 0* = 1, 1* = 1
+        match &self {
+            Expr::Zero => Expr::One,
+            Expr::One => Expr::One,
+            _ => Expr::Star(Rc::new(self)),
+        }
     }
 
     /// Evaluate expression with given variable values
     pub fn eval(&self, vars: &[S]) -> S {
         match self {
+            Expr::Zero => S::zero(),
+            Expr::One => S::one(),
             Expr::Const(s) => s.clone(),
             Expr::Var(i) => vars[*i].clone(),
             Expr::Combine(a, b) => a.eval(vars).combine(&b.eval(vars)),
             Expr::Extend(a, b) => a.eval(vars).extend(&b.eval(vars)),
             Expr::Star(a) => a.eval(vars).star(),
+        }
+    }
+    
+    /// Evaluate with a properly-sized identity element
+    /// This is needed when Expr::One appears and we need a concrete size
+    pub fn eval_with_one(&self, vars: &[S], one: &S) -> S {
+        match self {
+            Expr::Zero => {
+                // Use one's size to create a properly-sized zero
+                // For now, rely on combine semantics to handle this
+                S::zero()
+            },
+            Expr::One => one.clone(),
+            Expr::Const(s) => s.clone(),
+            Expr::Var(i) => vars[*i].clone(),
+            Expr::Combine(a, b) => a.eval_with_one(vars, one).combine(&b.eval_with_one(vars, one)),
+            Expr::Extend(a, b) => a.eval_with_one(vars, one).extend(&b.eval_with_one(vars, one)),
+            Expr::Star(a) => a.eval_with_one(vars, one).star(),
         }
     }
 }
@@ -217,5 +257,26 @@ mod tests {
         let expr = Expr::var(0).extend(Expr::var(0));
         let result = expr.eval(&[id.clone()]);
         assert_eq!(result, id);
+    }
+
+    #[test]
+    fn test_zero_one_simplification() {
+        let id = BoolMatrix::identity(2);
+        
+        // 0 ⊕ x = x
+        let expr: Expr<BoolMatrix> = Expr::zero().combine(Expr::constant(id.clone()));
+        assert!(matches!(expr, Expr::Const(_)));
+        
+        // x ⊗ 0 = 0
+        let expr: Expr<BoolMatrix> = Expr::constant(id.clone()).extend(Expr::zero());
+        assert!(matches!(expr, Expr::Zero));
+        
+        // 1 ⊗ x = x
+        let expr: Expr<BoolMatrix> = Expr::one().extend(Expr::constant(id.clone()));
+        assert!(matches!(expr, Expr::Const(_)));
+        
+        // 0* = 1
+        let expr: Expr<BoolMatrix> = Expr::zero().star();
+        assert!(matches!(expr, Expr::One));
     }
 }

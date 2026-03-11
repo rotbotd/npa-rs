@@ -124,6 +124,18 @@ impl Semiring for BoolMatrix {
         }
         result
     }
+    
+    fn zero_sized(size: usize) -> Self {
+        BoolMatrix::new(size)
+    }
+    
+    fn one_sized(size: usize) -> Self {
+        BoolMatrix::identity(size)
+    }
+    
+    fn size(&self) -> usize {
+        self.n
+    }
 }
 
 /// N²×N² Boolean matrix (tensor product of two N×N matrices)
@@ -135,6 +147,10 @@ pub struct TensorMatrix {
 }
 
 impl TensorMatrix {
+    pub fn size(&self) -> usize {
+        self.n
+    }
+    
     pub fn new(n: usize) -> Self {
         let n2 = n * n;
         TensorMatrix {
@@ -169,6 +185,18 @@ impl Semiring for TensorMatrix {
 
     fn one() -> Self {
         TensorMatrix::identity(0)
+    }
+    
+    fn zero_sized(size: usize) -> Self {
+        TensorMatrix::new(size)
+    }
+    
+    fn one_sized(size: usize) -> Self {
+        TensorMatrix::identity(size)
+    }
+    
+    fn size(&self) -> usize {
+        self.n
     }
 
     fn combine(&self, other: &Self) -> Self {

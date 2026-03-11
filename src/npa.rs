@@ -4,7 +4,7 @@ use crate::expr::Expr;
 use crate::cfg::{Cfg, DomTree};
 use crate::tarjan::tarjan;
 use crate::differentiate::differentiate;
-use crate::regularize::{tau_reg_coefficient, tau_reg_constant};
+use crate::regularize::{tau_reg_coefficient_direct, tau_reg_constant};
 
 /// Result of NPA-TP analysis
 #[derive(Clone, Debug)]
@@ -108,7 +108,9 @@ impl<S: Admissible> NpaSolver<S> {
     /// Run Newton iteration until convergence
     pub fn solve(&self, max_rounds: usize) -> NpaResult<S> {
         // Initialize: ν = f(0)
-        let zero_values: Vec<S> = vec![S::zero(); self.n];
+        // Use properly-sized zeros, not sentinel zeros
+        let size = self.one.size();
+        let zero_values: Vec<S> = vec![S::zero_sized(size); self.n];
         let mut nu: Vec<S> = self.rhs.iter()
             .map(|rhs| rhs.eval(&zero_values))
             .collect();
@@ -150,10 +152,8 @@ impl<S: Admissible> NpaSolver<S> {
         
         for j in 0..self.n {
             for k in 0..self.n {
-                // Differentiate Rhs_j with respect to X_k
-                let diff = differentiate(&self.rhs[j], k);
-                // Apply τ_Reg to get tensor coefficient
-                coeffs[k][j] = tau_reg_coefficient(&diff, k, nu);
+                // Use the direct coefficient computation which avoids X vs Y shadowing
+                coeffs[k][j] = tau_reg_coefficient_direct(&self.rhs[j], k, nu, &self.one);
             }
         }
         
@@ -192,9 +192,12 @@ impl<S: Admissible> NpaSolver<S> {
         // Evaluate path expressions for each Z_j
         let mut z_values = Vec::with_capacity(self.n);
         
+        // Get tensor size from the one matrix (it knows its dimension)
+        let tensor_size = self.one.tensor(&self.one).size();
+        
         for j in 1..=self.n {
             if let Some(path_expr) = self.path_exprs.get(&j) {
-                let z_j = eval_path_expr::<S>(path_expr, &label_values);
+                let z_j = eval_path_expr::<S>(path_expr, &label_values, tensor_size);
                 z_values.push(z_j);
             } else {
                 // No path to this node - use constant term only
@@ -203,6 +206,18 @@ impl<S: Admissible> NpaSolver<S> {
         }
         
         z_values
+    }
+
+    /// Debug: print path expressions
+    pub fn debug_path_exprs(&self) {
+        eprintln!("Path expressions:");
+        for j in 1..=self.n {
+            if let Some(path_expr) = self.path_exprs.get(&j) {
+                eprintln!("  Z{} = {:?}", j, path_expr);
+            } else {
+                eprintln!("  Z{} = (no path)", j);
+            }
+        }
     }
 }
 
@@ -217,7 +232,7 @@ fn collect_vars<S: Semiring>(expr: &Expr<S>) -> Vec<usize> {
 
 fn collect_vars_impl<S: Semiring>(expr: &Expr<S>, vars: &mut Vec<usize>) {
     match expr {
-        Expr::Const(_) => {}
+        Expr::Zero | Expr::One | Expr::Const(_) => {}
         Expr::Var(i) => vars.push(*i),
         Expr::Combine(a, b) | Expr::Extend(a, b) => {
             collect_vars_impl(a, vars);
@@ -228,30 +243,41 @@ fn collect_vars_impl<S: Semiring>(expr: &Expr<S>, vars: &mut Vec<usize>) {
 }
 
 /// Evaluate a path expression over DepLabel alphabet with given substitution
+/// `tensor_size` is the size of the tensor matrices (n^2 where n is the base matrix size)
 fn eval_path_expr<S: Admissible>(
     expr: &Expr<DepLabel>,
     label_values: &HashMap<DepLabel, S::Tensor>,
+    tensor_size: usize,
 ) -> S::Tensor {
     match expr {
+        Expr::Zero => S::Tensor::zero_sized(tensor_size),
+        Expr::One => S::Tensor::one_sized(tensor_size),
         Expr::Const(label) => {
-            label_values.get(label).cloned().unwrap_or_else(S::Tensor::zero)
+            // Check for special sentinel values from DepLabel semiring
+            if *label == DepLabel::zero() {
+                S::Tensor::zero_sized(tensor_size)
+            } else if *label == DepLabel::one() {
+                S::Tensor::one_sized(tensor_size)
+            } else {
+                label_values.get(label).cloned().unwrap_or_else(|| S::Tensor::zero_sized(tensor_size))
+            }
         }
         Expr::Var(_) => {
             // Variables in path expressions shouldn't exist after Tarjan
-            S::Tensor::zero()
+            S::Tensor::zero_sized(tensor_size)
         }
         Expr::Combine(a, b) => {
-            let a_val: S::Tensor = eval_path_expr::<S>(a, label_values);
-            let b_val: S::Tensor = eval_path_expr::<S>(b, label_values);
+            let a_val: S::Tensor = eval_path_expr::<S>(a, label_values, tensor_size);
+            let b_val: S::Tensor = eval_path_expr::<S>(b, label_values, tensor_size);
             a_val.combine(&b_val)
         }
         Expr::Extend(a, b) => {
-            let a_val: S::Tensor = eval_path_expr::<S>(a, label_values);
-            let b_val: S::Tensor = eval_path_expr::<S>(b, label_values);
+            let a_val: S::Tensor = eval_path_expr::<S>(a, label_values, tensor_size);
+            let b_val: S::Tensor = eval_path_expr::<S>(b, label_values, tensor_size);
             a_val.extend(&b_val)
         }
         Expr::Star(a) => {
-            let a_val: S::Tensor = eval_path_expr::<S>(a, label_values);
+            let a_val: S::Tensor = eval_path_expr::<S>(a, label_values, tensor_size);
             a_val.star()
         }
     }

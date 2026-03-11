@@ -305,7 +305,7 @@ fn dense_to_sparse(d: &BoolMatrix) -> SparseBoolMatrix {
 
 /// Generate a LINEAR expression suitable for NPA
 /// Each variable appears at most once, and not inside stars
-fn random_linear_expr<S: Semiring + Clone>(
+pub fn random_linear_expr<S: Semiring + Clone>(
     rng: &mut Rng,
     n_vars: usize,
     constants: &[S],
@@ -424,6 +424,46 @@ fn random_const_expr<S: Semiring + Clone>(
             _ => unreachable!()
         }
     }
+}
+
+/// Naive Kleene iteration: repeatedly evaluate equations until fixpoint
+/// This is trivially correct for finite lattices (Boolean matrices)
+fn naive_kleene_iteration(
+    rhs: &[Expr<BoolMatrix>],
+    max_rounds: usize,
+) -> Option<Vec<BoolMatrix>> {
+    if rhs.is_empty() {
+        return Some(vec![]);
+    }
+    
+    // Get matrix size from evaluating at zero
+    let n = rhs.len();
+    let zero_values: Vec<BoolMatrix> = vec![BoolMatrix::new(0); n];
+    let first_eval = rhs[0].eval(&zero_values);
+    let mat_size = first_eval.n;
+    
+    // Initialize to zero matrices of correct size
+    let mut values: Vec<BoolMatrix> = vec![BoolMatrix::new(mat_size); n];
+    
+    for _ in 0..max_rounds {
+        let new_values: Vec<BoolMatrix> = rhs.iter()
+            .map(|expr| expr.eval(&values))
+            .collect();
+        
+        // Combine with previous (monotonic update)
+        let combined: Vec<BoolMatrix> = values.iter()
+            .zip(new_values.iter())
+            .map(|(old, new)| old.combine(new))
+            .collect();
+        
+        if combined == values {
+            return Some(combined);
+        }
+        
+        values = combined;
+    }
+    
+    None // didn't converge
 }
 
 /// Test NPA convergence on random equation systems
@@ -629,6 +669,48 @@ mod tests {
         let failures = run_fuzz(31415926, 50000);
         if !failures.is_empty() {
             for f in &failures[..std::cmp::min(100, failures.len())] {
+                eprintln!("{}", f);
+            }
+            panic!("{} failures", failures.len());
+        }
+    }
+
+    #[test]
+    #[ignore] // run with: cargo test --release -- --ignored test_npa_vs_naive
+    fn test_npa_vs_naive() {
+        use super::*;
+        let mut rng = Rng::new(27182818);
+        let mut failures = Vec::new();
+
+        for i in 0..1000 {
+            let n_eq = 1 + rng.next_usize(3);
+            let mat_size = 2 + rng.next_usize(2);
+            
+            let constants: Vec<BoolMatrix> = (0..3)
+                .map(|_| random_bool_matrix(&mut rng, mat_size, 0.3))
+                .collect();
+
+            let rhs: Vec<Expr<BoolMatrix>> = (0..n_eq)
+                .map(|_| random_linear_expr(&mut rng, n_eq, &constants, 3))
+                .collect();
+
+            let one = BoolMatrix::identity(mat_size);
+            let npa_result = solve_npa(rhs.clone(), one, 100);
+            
+            if let Some(naive_result) = naive_kleene_iteration(&rhs, 1000) {
+                if npa_result.values != naive_result {
+                    failures.push(format!(
+                        "iter {}: NPA != naive\n  NPA: {:?}\n  naive: {:?}",
+                        i, npa_result.values, naive_result
+                    ));
+                }
+            } else {
+                failures.push(format!("iter {}: naive didn't converge", i));
+            }
+        }
+
+        if !failures.is_empty() {
+            for f in &failures[..std::cmp::min(10, failures.len())] {
                 eprintln!("{}", f);
             }
             panic!("{} failures", failures.len());

@@ -47,7 +47,10 @@ pub fn tarjan<S: Semiring>(cfg: &Cfg<S>, domtree: &DomTree) -> PathExpressions<S
                 if let Some(&(sibling_dom, _)) = edge_to_derived.get(&(edge.from, child)) {
                     // Compute image of this edge
                     let img = edge_paths(&edge.label, edge.from, sibling_dom, &dpath, domtree);
-                    image_map.insert((sibling_dom, child), img);
+                    // Sum images for edges that map to the same derived edge
+                    image_map.entry((sibling_dom, child))
+                        .and_modify(|e| *e = e.clone().combine(img.clone()))
+                        .or_insert(img);
                 }
             }
         }
@@ -295,6 +298,8 @@ where
     F: Fn(usize) -> Option<Expr<S>> + Copy,
 {
     match expr {
+        Expr::Zero => Expr::Zero,
+        Expr::One => Expr::One,
         Expr::Const(s) => Expr::Const(s.clone()),
         Expr::Var(i) => lookup(*i).unwrap_or_else(|| Expr::Var(*i)),
         Expr::Combine(a, b) => {

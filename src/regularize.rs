@@ -1,5 +1,6 @@
 use crate::semiring::{Semiring, Admissible};
 use crate::expr::Expr;
+use std::rc::Rc;
 
 /// τ_Reg transformation: convert LCFL terms to left-linear form over tensor semiring
 /// 
@@ -30,6 +31,82 @@ impl<S: Semiring> LcflTerm<S> {
     }
 }
 
+/// Computes the differential D_Xj[expr] and returns the LCFL coefficients directly.
+/// 
+/// This avoids building intermediate ASTs and completely prevents variable shadowing.
+/// The key insight: when differentiating, the original variables become constants
+/// (evaluated at ν), and only the linear placeholder Y appears in the result.
+/// 
+/// By computing coefficients directly, we:
+/// - Eliminate the Star panic (D[a*] = a* ⊗ D[a] ⊗ a* wraps coefficients cleanly)
+/// - Eliminate X vs Y shadowing (no AST to parse)
+/// - Run much faster (no intermediate allocation)
+pub fn differentiate_to_lcfl<S: Semiring>(
+    expr: &Expr<S>,
+    var_idx: usize
+) -> Vec<LcflTerm<S>> {
+    match expr {
+        // Constants vanish in differentiation
+        Expr::Zero | Expr::One | Expr::Const(_) => vec![],
+
+        Expr::Var(i) => {
+            if *i == var_idx {
+                // D_X[X](Y) = Y = 1 ⊗ Y ⊗ 1
+                vec![LcflTerm::identity()]
+            } else {
+                // Other variables act as constants, derivative is 0
+                vec![]
+            }
+        }
+
+        Expr::Combine(a, b) => {
+            // D[a ⊕ b] = D[a] ⊕ D[b]
+            let mut terms = differentiate_to_lcfl(a, var_idx);
+            terms.extend(differentiate_to_lcfl(b, var_idx));
+            terms
+        }
+
+        Expr::Extend(a, b) => {
+            // Product rule: D[a ⊗ b] = D[a] ⊗ b ⊕ a ⊗ D[b]
+            let mut terms = Vec::new();
+
+            // For D[a] ⊗ b: the right coefficient gets multiplied by b
+            for t in differentiate_to_lcfl(a, var_idx) {
+                terms.push(LcflTerm::new(
+                    t.left,
+                    t.right.extend((**b).clone())
+                ));
+            }
+
+            // For a ⊗ D[b]: the left coefficient gets multiplied by a
+            for t in differentiate_to_lcfl(b, var_idx) {
+                terms.push(LcflTerm::new(
+                    (**a).clone().extend(t.left),
+                    t.right
+                ));
+            }
+
+            terms
+        }
+
+        Expr::Star(a) => {
+            // Theorem 6.3: D[a*] = a* ⊗ D[a] ⊗ a*
+            // This elegantly wraps the coefficients without panicking!
+            let a_star = Expr::Star(a.clone());
+            let mut terms = Vec::new();
+
+            for t in differentiate_to_lcfl(a, var_idx) {
+                terms.push(LcflTerm::new(
+                    a_star.clone().extend(t.left),
+                    t.right.extend(a_star.clone())
+                ));
+            }
+
+            terms
+        }
+    }
+}
+
 /// Extract LCFL terms from a differentiated expression
 /// 
 /// After differentiation, we have expressions where Y appears linearly.
@@ -41,6 +118,8 @@ pub fn extract_lcfl_terms<S: Semiring>(
     var_idx: usize,
 ) -> Option<Vec<LcflTerm<S>>> {
     match expr {
+        Expr::Zero => None, // No Y here
+        Expr::One => None,  // No Y here (identity constant)
         Expr::Const(_) => None, // No Y here
         
         Expr::Var(i) => {
@@ -130,10 +209,11 @@ pub fn extract_lcfl_terms<S: Semiring>(
 pub fn lcfl_to_tensor_coeffs<S: Admissible>(
     terms: &[LcflTerm<S>],
     values: &[S],
+    one: &S,
 ) -> Vec<S::Tensor> {
     terms.iter().map(|term| {
-        let left_val = term.left.eval(values);
-        let right_val = term.right.eval(values);
+        let left_val = term.left.eval_with_one(values, one);
+        let right_val = term.right.eval_with_one(values, one);
         // Coupling: c_lᵗ ⊗ c_r
         left_val.transpose().tensor(&right_val)
     }).collect()
@@ -156,15 +236,35 @@ pub fn sum_tensor_coeffs<S: Admissible>(coeffs: Vec<S::Tensor>) -> S::Tensor {
 ///   Z_k = (1ᵗ ⊗ Rhs_k(ν)) ⊕T Σ_j (Z_j ⊗T Coeff_j(k))
 /// 
 /// where Coeff_j(k) = sum of (c_lᵗ ⊗ c_r) for all terms c_l ⊗ Y_j ⊗ c_r in D_Xj[Rhs_k]
+/// Compute tau_reg coefficient directly from an expression (not pre-differentiated)
+/// This uses the new differentiate_to_lcfl which avoids the X vs Y shadowing bug
+/// `one` is a properly-sized identity element for the semiring
+pub fn tau_reg_coefficient_direct<S: Admissible>(
+    expr: &Expr<S>,
+    var_idx: usize,
+    values: &[S],
+    one: &S,
+) -> S::Tensor {
+    let terms = differentiate_to_lcfl(expr, var_idx);
+    if terms.is_empty() {
+        S::Tensor::zero()
+    } else {
+        let coeffs = lcfl_to_tensor_coeffs(&terms, values, one);
+        sum_tensor_coeffs::<S>(coeffs)
+    }
+}
+
+/// Old interface for compatibility (takes pre-differentiated expression)
 pub fn tau_reg_coefficient<S: Admissible>(
     diff_expr: &Expr<S>,
     var_idx: usize,
     values: &[S],
+    one: &S,
 ) -> S::Tensor {
     match extract_lcfl_terms(diff_expr, var_idx) {
         None => S::Tensor::zero(),
         Some(terms) => {
-            let coeffs = lcfl_to_tensor_coeffs(&terms, values);
+            let coeffs = lcfl_to_tensor_coeffs(&terms, values, one);
             sum_tensor_coeffs::<S>(coeffs)
         }
     }

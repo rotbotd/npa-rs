@@ -18,6 +18,8 @@ use crate::expr::Expr;
 /// That's why we need τ_Reg transformation after differentiation.
 pub fn differentiate<S: Semiring>(expr: &Expr<S>, var_idx: usize) -> Expr<S> {
     match expr {
+        Expr::Zero => Expr::zero(),
+        Expr::One => Expr::zero(),
         Expr::Const(_) => Expr::zero(),
         
         Expr::Var(i) => {
@@ -123,10 +125,7 @@ mod tests {
         let dc = differentiate(&c, 0);
         
         // Derivative of constant is zero
-        match dc {
-            Expr::Const(m) => assert_eq!(m, BoolMatrix::new(0)),
-            _ => panic!("Expected Const"),
-        }
+        assert!(matches!(dc, Expr::Zero));
     }
     
     #[test]
@@ -136,17 +135,11 @@ mod tests {
         
         // D_X0[X0] = 1
         let dx0 = differentiate(&x0, 0);
-        match dx0 {
-            Expr::Const(m) => assert_eq!(m, BoolMatrix::identity(0)),
-            _ => panic!("Expected one"),
-        }
+        assert!(matches!(dx0, Expr::One));
         
         // D_X0[X1] = 0
         let dx1 = differentiate(&x1, 0);
-        match dx1 {
-            Expr::Const(m) => assert_eq!(m, BoolMatrix::new(0)),
-            _ => panic!("Expected zero"),
-        }
+        assert!(matches!(dx1, Expr::Zero));
     }
     
     #[test]

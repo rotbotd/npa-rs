@@ -5,6 +5,18 @@ pub trait Semiring: Clone + Eq + std::fmt::Debug {
     fn combine(&self, other: &Self) -> Self; // ⊕
     fn extend(&self, other: &Self) -> Self;  // ⊗
     fn star(&self) -> Self;                  // Kleene star: a* = 1 ⊕ a ⊕ aa ⊕ ...
+    
+    /// Zero with explicit size (for path expression evaluation)
+    /// Default implementation just calls zero()
+    fn zero_sized(_size: usize) -> Self { Self::zero() }
+    
+    /// One with explicit size (for path expression evaluation)  
+    /// Default implementation just calls one()
+    fn one_sized(_size: usize) -> Self { Self::one() }
+    
+    /// Get the size of this element (for matrices, returns n)
+    /// Default returns 0 for unsized elements
+    fn size(&self) -> usize { 0 }
 }
 
 /// An admissible semiring supports NPA-TP via tensor products
